@@ -29,7 +29,7 @@ struct container {
     char *exe;
     char new_root[PATH_MAX];
     char old_root[PATH_MAX];
-    int pipe_fd[2];
+    //int pipe_fd[2];
 };
 
 void err_func(const char *msgfmt , ...) {
@@ -41,12 +41,45 @@ void err_func(const char *msgfmt , ...) {
 }
 
 static int child(void *arg) {
-    char ch;
+    //char ch;
     struct container *argvv = (struct container*)arg;
+    /*
     close(argvv->pipe_fd[1]);
     if(read(argvv->pipe_fd[0], &ch, 1) != 0) {
         err_func("pipe synchronization failed: %s", strerror(errno));
     }
+
+    char proc_mount[128];
+    if(snprintf(proc_mount, 128, "%s/proc", argvv->new_root) < 0) {
+        err_func("snprintf failed: %s\n", strerror(errno));
+    }
+
+    if(mount("/proc", proc_mount, "", MS_BIND|MS_REC, "") == -1) {
+        err_func("mount %s (bind, recursive) failed: %s\n", 
+                proc_mount, strerror(errno));
+    }
+
+    char sys_mount[128];
+    if(snprintf(sys_mount, 128, "%s/sys", argvv->new_root) < 0) {
+        err_func("snprintf failed: %s\n", strerror(errno));
+    }
+
+    if(mount("/sys", sys_mount, "", MS_BIND|MS_REC, "") == -1) {
+        err_func("mount %s (bind, recursive) failed: %s\n", 
+                sys_mount, strerror(errno));
+    }
+
+    char dev_mount[128];
+    if(snprintf(dev_mount, 128, "%s/dev", argvv->new_root) < 0) {
+        err_func("snprintf failed: %s\n", strerror(errno));
+    }
+
+    if(mount("/dev", dev_mount, "", MS_BIND|MS_REC, "") == -1) {
+        err_func("mount %s (bind, recursive) failed: %s\n", 
+                dev_mount, strerror(errno));
+    }
+
+    */
 
     if(mount(argvv->new_root, argvv->new_root, "", MS_BIND|MS_REC, "") == -1) {
         err_func("mount %s (bind, recursive) failed: %s\n", 
@@ -76,6 +109,10 @@ static int child(void *arg) {
         err_func("mount /proc failed: %s\n", strerror(errno));
     }
 
+    if(mount("tmp", "tmp", "tmpfs", 0, "") == -1) {
+        err_func("mount /tmp failed: %s\n", strerror(errno));
+    }
+
     if(mount("sys", "sys", "sysfs", 0, "") == -1) {
         err_func("mount /sys failed: %s\n", strerror(errno));
     }
@@ -92,9 +129,6 @@ static int child(void *arg) {
         err_func("mount /dev/shm failed: %s\n", strerror(errno));
     }
 
-    if(mount("tmp", "tmp", "tmpfs", 0, "") == -1) {
-        err_func("mount /tmp failed: %s\n", strerror(errno));
-    }
 
     if(rmdir("/.pivot_root") == -1) {
         err_func("rmdir /.pivot_root failed: %s\n", strerror(errno));
@@ -204,10 +238,12 @@ int main(int argc, char **argv) {
         }
     }
 
+    /*
     if(pipe(c->pipe_fd) == -1) {
         cleanup(c, NULL);
         err_func("pipe failed: %s\n", strerror(errno));
     }
+    */
 
     pid_t pid;
     char *stack;
@@ -221,13 +257,14 @@ int main(int argc, char **argv) {
 
     stack_top = stack + stack_size;
     pid = clone(child, stack_top, 
-            CLONE_NEWUSER | CLONE_NEWUTS | CLONE_NEWPID | CLONE_NEWNS | SIGCHLD, 
+        (/*CLONE_NEWUSER |*/ CLONE_NEWUTS | CLONE_NEWPID | CLONE_NEWNS | SIGCHLD), 
     c);
     if((pid_t)-1 == pid) {
         cleanup(c, stack);
         err_func("clone failed: %s\n", strerror(errno));
     }
 
+    /*
     char uidmap[PATH_MAX];
     if(snprintf(uidmap , PATH_MAX, "/proc/%ld/uid_map", (long)pid) < 0) {
         cleanup(c, stack);
@@ -249,7 +286,7 @@ int main(int argc, char **argv) {
     }
 
     char uidmapping[128];
-    if(snprintf(uidmapping, 128, "%u %u 1\n", getuid(), 0) < 0) {
+    if(snprintf(uidmapping, 128, "%u %u 1\n", 0, getuid()) < 0) {
         cleanup(c, stack);
         close(fd1);
         err_func("sprintf failed: %s", strerror(errno));
@@ -258,32 +295,54 @@ int main(int argc, char **argv) {
     if(write(fd1, uidmapping, strlen(uidmapping)) != strlen(uidmapping)) {
         cleanup(c, stack);
         close(fd1);
-        err_func("Failed to write uidmapping: %s", strerror(errno));
+        err_func("Failed to write uidmapping %s: %s\n",
+                uidmap, strerror(errno));
     }
 
     close(fd1);
 
+    char setgroups[128];
+    if(snprintf(setgroups, 128, "/proc/%ld/setgroups", (long)pid) < 0) {
+        cleanup(c, stack);
+        err_func("sprintf failed: %s\n", strerror(errno));
+    }
+
+    int fdg = open(setgroups, O_RDWR);
+    if(fdg == -1) {
+        cleanup(c, stack);
+        err_func("Failed to open %s: %s", setgroups, strerror(errno));
+    }
+
+    if(write(fdg, "deny", strlen("deny")) != strlen("deny")) {
+        cleanup(c, stack);
+        err_func("Failed to write to %s: %s\n", setgroups, strerror(errno));
+    }
+
+    close(fdg);
+
     int fd2 = open(gidmap, O_RDWR);
     if(fd2 == -1) {
         cleanup(c, stack);
-        err_func("Failed to update %s: %s", gidmap, strerror(errno));
+        err_func("Failed to update %s: %s\n", gidmap, strerror(errno));
     }
 
     char gidmapping[128];
-    if(snprintf(gidmapping, 128, "%u %u 1\n", getgid(), 0) < 0) {
+    if(snprintf(gidmapping, 128, "%u %u 1\n", 0, getgid()) < 0) {
         cleanup(c, stack);
         close(fd2);
-        err_func("sprintf failed: %s", strerror(errno));
+        err_func("sprintf failed: %s\n", strerror(errno));
     }
 
     if(write(fd2, gidmapping, strlen(gidmapping)) != strlen(gidmapping)) {
         cleanup(c, stack);
         close(fd2);
-        err_func("Failed to write gidmapping: %s", strerror(errno));
+        err_func("Failed to write gidmapping %s: %s\n", 
+                gidmap, strerror(errno));
     }
 
     close(fd2);
     close(c->pipe_fd[1]);
+    */
     if(waitpid(pid, &status, 0) == -1) {
         cleanup(c, stack);
         err_func("waitpid failed: %s\n", strerror(errno));

@@ -190,7 +190,8 @@ int main(int argc, char **argv) {
 
     if((status = mkdir(c->old_root, 0700)) == -1) {
         if(errno != EEXIST) {
-            fprintf(stderr, "Mkdir failed %s\n", strerror(errno));
+            fprintf(stderr, "Mkdir %s failed %s\n", 
+                    c->old_root, strerror(errno));
             cleanup(c);
             return(127);
         }
@@ -206,8 +207,15 @@ int main(int argc, char **argv) {
     pid = clone(child, stack_top, 
                 CLONE_NEWUTS | CLONE_NEWPID | CLONE_NEWNS | SIGCHLD, 
                 c);
+    if((pid_t)-1 == pid) {
+        fprintf(stderr, "clone failed %s\n", strerror(errno));
+        cleanup(c);
+        free(stack);
+        return(127);
+    }
+
     if(waitpid(pid, &status, 0) == -1) {
-        fprintf(stderr, "Waitpid failed\n");
+        fprintf(stderr, "Waitpid failed %s\n", strerror(errno));
         cleanup(c);
         free(stack);
         return(127);

@@ -7,6 +7,7 @@
 #include <sys/wait.h>
 #include <sys/mount.h>
 #include <sched.h>
+#include <linux/sched.h>
 #include <limits.h>
 #include <libgen.h>
 #include <stdio.h>
@@ -38,6 +39,21 @@ void err_func(const char *msgfmt , ...) {
     vfprintf(stderr, msgfmt, fargs);
     va_end(fargs);
     exit(EXIT_FAILURE);
+}
+
+static void mnt_cgroup_dir(const char *p) {
+    char d[PATH_MAX];
+    if(snprintf(d, PATH_MAX, "/sys/fs/cgroup/%s", p) < 0) {
+        err_func("snprintf failed: %s\n", strerror(errno));
+    }
+
+    if(mkdir(d, 0555) == -1) {
+        err_func("mkdir %s failed: %s\n", d, strerror(errno));
+    }
+
+    if(mount(p, d, "cgroup", (MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME), p) == -1) {
+        err_func("mount %s failed: %s\n", d, strerror(errno));
+    }
 }
 
 static int child(void *arg) {
@@ -113,8 +129,40 @@ static int child(void *arg) {
         err_func("mount /tmp failed: %s\n", strerror(errno));
     }
 
-    if(mount("sys", "sys", "sysfs", 0, "") == -1) {
+    if(mount("sysfs", "sys", "sysfs", 0, "") == -1) {
         err_func("mount /sys failed: %s\n", strerror(errno));
+    }
+
+    if(mount("tmpfs", "/sys/fs/cgroup", "tmpfs", 0, "") == -1) {
+        err_func("mount /sys/fs/cgroup failed: %s\n", strerror(errno));
+    }
+
+    mnt_cgroup_dir("blkio");
+    mnt_cgroup_dir("cpu,cpuacct");
+    mnt_cgroup_dir("cpuset");
+    mnt_cgroup_dir("devices");
+    mnt_cgroup_dir("freezer");
+    mnt_cgroup_dir("hugetlb");
+    mnt_cgroup_dir("memory");
+    mnt_cgroup_dir("net_cls,net_prio");
+    mnt_cgroup_dir("perf_event");
+    mnt_cgroup_dir("pids");
+    if(symlink("/sys/fs/cgroup/cpu,cpuacct", "/sys/fs/cgroup/cpu") == -1) {
+        err_func("symlink failed: %s\n", strerror(errno));
+    }
+
+    if(symlink("/sys/fs/cgroup/cpu,cpuacct", "/sys/fs/cgroup/cpuacct") == -1) {
+        err_func("symlink failed: %s\n", strerror(errno));
+    }
+
+    if(symlink("/sys/fs/cgroup/net_cls,net_prio", 
+                "/sys/fs/cgroup/net_cls") == -1) {
+        err_func("symlink failed: %s\n", strerror(errno));
+    }
+
+    if(symlink("/sys/fs/cgroup/net_cls,net_prio", 
+                "/sys/fs/cgroup/net_prio") == -1) {
+        err_func("symlink failed: %s\n", strerror(errno));
     }
 
     if(mount("devtmpfs", "dev", "devtmpfs", 0, "") == -1) {
@@ -266,8 +314,8 @@ int main(int argc, char **argv) {
 
     stack_top = stack + stack_size;
     pid = clone(child, stack_top, 
-        (/*CLONE_NEWUSER |*/ CLONE_NEWUTS | CLONE_NEWPID | CLONE_NEWNS | SIGCHLD), 
-    c);
+        (/*CLONE_NEWUSER |*/ CLONE_NEWUTS | CLONE_NEWPID | 
+         CLONE_NEWNS | CLONE_NEWCGROUP | SIGCHLD), c);
     if((pid_t)-1 == pid) {
         cleanup(c, stack);
         err_func("clone failed: %s\n", strerror(errno));

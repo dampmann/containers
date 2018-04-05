@@ -79,8 +79,8 @@ static int child(void *arg) {
                 dev_mount, strerror(errno));
     }
 
-    */
 
+    */
     if(mount(argvv->new_root, argvv->new_root, "", MS_BIND|MS_REC, "") == -1) {
         err_func("mount %s (bind, recursive) failed: %s\n", 
                 argvv->new_root, strerror(errno));
@@ -128,7 +128,6 @@ static int child(void *arg) {
     if(mount("shmfs", "dev/shm", "tmpfs", 0, "") == -1) {
         err_func("mount /dev/shm failed: %s\n", strerror(errno));
     }
-
 
     if(rmdir("/.pivot_root") == -1) {
         err_func("rmdir /.pivot_root failed: %s\n", strerror(errno));
@@ -214,6 +213,16 @@ int main(int argc, char **argv) {
             " -n container_name -r executable\n",
         argv[0]);
         exit(EXIT_FAILURE);
+    }
+
+    if(unshare(CLONE_NEWNS) == -1) {
+        cleanup(c, NULL);
+        err_func("unshare failed: %s\n", strerror(errno));
+    }
+
+    if(mount("none", "/", "", MS_PRIVATE|MS_REC, "") == -1) {
+        cleanup(c, NULL);
+        err_func("mount / (private, recursive) failed: %s\n", strerror(errno));
     }
 
     if(snprintf(c->new_root , PATH_MAX, "%s/%s/rootfs", c->cdir, c->name) < 0) {

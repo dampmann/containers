@@ -248,8 +248,7 @@ int main(int argc, char **argv) {
 
     char preconfig[256];
 
-    if(snprintf(preconfig , 256, "./pre-config.sh %s %s", 
-                c->name, c->cidr) < 0) {
+    if(snprintf(preconfig , 256, "./pre-config.sh %s", c->name) < 0) {
         cleanup(c, NULL);
         err_func("snprintf failed for preconfig: %s\n", strerror(errno));
     }
@@ -262,41 +261,7 @@ int main(int argc, char **argv) {
             err_func("Failed to create shell for %s: %s\n", preconfig,
                     strerror(errno));
         } else {
-            switch(status) {
-                case 1:
-                    err_func("command %s failed with exit code %d\n", preconfig, status);
-                    break;
-                case 20:
-                    err_func("command %s failed with exit code %d\n", preconfig, status);
-                    break;
-                case 21:
-                    err_func("command %s failed with exit code %d\n", preconfig, status);
-                    break;
-                case 22:
-                    err_func("command %s failed with exit code %d\n", preconfig, status);
-                    break;
-                case 23:
-                    err_func("command %s failed with exit code %d\n", preconfig, status);
-                    break;
-                case 24:
-                    err_func("command %s failed with exit code %d\n", preconfig, status);
-                    break;
-                case 25:
-                    err_func("command %s failed with exit code %d\n", preconfig, status);
-                    break;
-                case 26:
-                    err_func("command %s failed with exit code %d\n", preconfig, status);
-                    break;
-                case 27:
-                    err_func("command %s failed with exit code %d\n", preconfig, status);
-                    break;
-                case 28:
-                    err_func("command %s failed with exit code %d\n", preconfig, status);
-                    break;
-                default:
-                    err_func("command %s failed with exit code %d\n", preconfig, status);
-                    break;
-            }
+            err_func("command %s failed with exit code %d\n", preconfig, status);
         }
     }
 
@@ -446,6 +411,39 @@ int main(int argc, char **argv) {
         }
     }
 
+    if(snprintf(vethcmd, 256, "ip netns exec %s ip addr add 127.0.0.1/8 dev lo", 
+                c->name) < 0) {
+        err_func("snprintf failed for vethcmd: %s\n", c->name);
+    }
+
+    if((status = system(vethcmd)) != 0) {
+        if(status == -1) {
+            err_func("Failed to create child for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else if(status == 127) {
+            err_func("Failed to create shell for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else {
+            err_func("command %s failed with exit code %d\n", vethcmd, status);
+        }
+    }
+
+    if(snprintf(vethcmd, 256, "ip netns exec %s ip link set lo up", 
+                c->name) < 0) {
+        err_func("snprintf failed for vethcmd: %s\n", c->name);
+    }
+
+    if((status = system(vethcmd)) != 0) {
+        if(status == -1) {
+            err_func("Failed to create child for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else if(status == 127) {
+            err_func("Failed to create shell for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else {
+            err_func("command %s failed with exit code %d\n", vethcmd, status);
+        }
+    }
     if(snprintf(vethcmd, 256, 
         "ip netns exec %s ip route add default via 172.20.0.1", c->name) < 0) {
         err_func("snprintf failed for vethcmd: %s\n", c->name);

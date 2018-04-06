@@ -1,14 +1,13 @@
 #!/bin/bash
 
-if (( $# != 2)); then
+if (( $# != 1)); then
     echo "requires the container name and the ip address in cidr notation"
     exit 1
 fi
 
 cname=$1
-ip=$2
 
-echo "Running pre-setup for container $cname with ip $ip"
+echo "Running pre-setup for container $cname"
 echo -n "Checking if iptables is installed"
 $(which iptables >/dev/null 2>&1)
 if [ $? != 0 ]; then

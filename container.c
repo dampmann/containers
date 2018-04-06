@@ -14,13 +14,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <errno.h>
-
-/* 
-   requires that / is shared mounted
-   pivot_root will fail with EINVAL
-   in this case do unshare -m first 
-   then run this program
-*/
+#include <stdbool.h>
 
 const int stack_size = 1024*1024;
 
@@ -28,6 +22,7 @@ struct container {
     char *cdir;
     char *name;
     char *exe;
+    char *cidr;
     char new_root[PATH_MAX];
     char old_root[PATH_MAX];
     //int pipe_fd[2];
@@ -39,6 +34,13 @@ void err_func(const char *msgfmt , ...) {
     vfprintf(stderr, msgfmt, fargs);
     va_end(fargs);
     exit(EXIT_FAILURE);
+}
+
+void err_warn(const char *msgfmt , ...) {
+    va_list fargs;
+    va_start(fargs, msgfmt);
+    vfprintf(stderr, msgfmt, fargs);
+    va_end(fargs);
 }
 
 static void mnt_cgroup_dir(const char *p) {
@@ -57,46 +59,8 @@ static void mnt_cgroup_dir(const char *p) {
 }
 
 static int child(void *arg) {
-    //char ch;
     struct container *argvv = (struct container*)arg;
-    /*
-    close(argvv->pipe_fd[1]);
-    if(read(argvv->pipe_fd[0], &ch, 1) != 0) {
-        err_func("pipe synchronization failed: %s", strerror(errno));
-    }
-
-    char proc_mount[128];
-    if(snprintf(proc_mount, 128, "%s/proc", argvv->new_root) < 0) {
-        err_func("snprintf failed: %s\n", strerror(errno));
-    }
-
-    if(mount("/proc", proc_mount, "", MS_BIND|MS_REC, "") == -1) {
-        err_func("mount %s (bind, recursive) failed: %s\n", 
-                proc_mount, strerror(errno));
-    }
-
-    char sys_mount[128];
-    if(snprintf(sys_mount, 128, "%s/sys", argvv->new_root) < 0) {
-        err_func("snprintf failed: %s\n", strerror(errno));
-    }
-
-    if(mount("/sys", sys_mount, "", MS_BIND|MS_REC, "") == -1) {
-        err_func("mount %s (bind, recursive) failed: %s\n", 
-                sys_mount, strerror(errno));
-    }
-
-    char dev_mount[128];
-    if(snprintf(dev_mount, 128, "%s/dev", argvv->new_root) < 0) {
-        err_func("snprintf failed: %s\n", strerror(errno));
-    }
-
-    if(mount("/dev", dev_mount, "", MS_BIND|MS_REC, "") == -1) {
-        err_func("mount %s (bind, recursive) failed: %s\n", 
-                dev_mount, strerror(errno));
-    }
-
-
-    */
+    
     if(mount(argvv->new_root, argvv->new_root, "", MS_BIND|MS_REC, "") == -1) {
         err_func("mount %s (bind, recursive) failed: %s\n", 
                 argvv->new_root, strerror(errno));
@@ -202,6 +166,9 @@ void cleanup(struct container *c, char *stack) {
             free(c->cdir);
         }
 
+        if(c->cidr != NULL) {
+            free(c->cidr);
+        }
         free(c);
     }
 
@@ -213,6 +180,11 @@ void cleanup(struct container *c, char *stack) {
 int main(int argc, char **argv) {
     int status = -1;
     int opt;
+    bool flagc = false;
+    bool flagn = false;
+    bool flagr = false;
+    bool flagi = false;
+
     struct container *c = malloc(sizeof(struct container));
     if(c == NULL) {
         err_func("Out of memory when allocating struct container\n");
@@ -221,9 +193,10 @@ int main(int argc, char **argv) {
     c->name = NULL;
     c->exe = NULL;
 
-    while ((opt = getopt(argc, argv, "c:n:r:")) != -1) {
+    while ((opt = getopt(argc, argv, "c:n:r:i:")) != -1) {
     switch (opt) {
         case 'c':
+            flagc = true;
             c->cdir = strdup(optarg);
             if(c->cdir == NULL) {
                 cleanup(c, NULL);
@@ -231,6 +204,7 @@ int main(int argc, char **argv) {
             }
             break;
         case 'n':
+            flagn = true;
             c->name = strdup(optarg);
             if(c->name == NULL) {
                 cleanup(c, NULL);
@@ -238,10 +212,19 @@ int main(int argc, char **argv) {
             }
             break;
         case 'r':
+            flagr = true;
             c->exe = strdup(optarg);
             if(c->exe == NULL) {
                 cleanup(c, NULL);
                 err_func("Out of memory strdup option arg -r\n");
+            }
+            break;
+        case 'i':
+            flagi = true;
+            c->cidr = strdup(optarg);
+            if(c->cidr == NULL) {
+                cleanup(c, NULL);
+                err_func("Out of memory strdup option arg -i\n");
             }
             break;
         default:
@@ -254,13 +237,67 @@ int main(int argc, char **argv) {
        }
     }
 
-    if(optind != 7) {
+    if(!(flagc && flagn && flagr && flagi)) {
         cleanup(c, NULL);
         fprintf(stderr, 
             "Usage: %s -c container_dir"
             " -n container_name -r executable\n",
         argv[0]);
         exit(EXIT_FAILURE);
+    }
+
+    char preconfig[256];
+
+    if(snprintf(preconfig , 256, "./pre-config.sh %s %s", 
+                c->name, c->cidr) < 0) {
+        cleanup(c, NULL);
+        err_func("snprintf failed for preconfig: %s\n", strerror(errno));
+    }
+
+    if((status = system(preconfig)) != 0) {
+        if(status == -1) {
+            err_func("Failed to create child for %s: %s\n", preconfig,
+                    strerror(errno));
+        } else if(status == 127) {
+            err_func("Failed to create shell for %s: %s\n", preconfig,
+                    strerror(errno));
+        } else {
+            switch(status) {
+                case 1:
+                    err_func("command %s failed with exit code %d\n", preconfig, status);
+                    break;
+                case 20:
+                    err_func("command %s failed with exit code %d\n", preconfig, status);
+                    break;
+                case 21:
+                    err_func("command %s failed with exit code %d\n", preconfig, status);
+                    break;
+                case 22:
+                    err_func("command %s failed with exit code %d\n", preconfig, status);
+                    break;
+                case 23:
+                    err_func("command %s failed with exit code %d\n", preconfig, status);
+                    break;
+                case 24:
+                    err_func("command %s failed with exit code %d\n", preconfig, status);
+                    break;
+                case 25:
+                    err_func("command %s failed with exit code %d\n", preconfig, status);
+                    break;
+                case 26:
+                    err_func("command %s failed with exit code %d\n", preconfig, status);
+                    break;
+                case 27:
+                    err_func("command %s failed with exit code %d\n", preconfig, status);
+                    break;
+                case 28:
+                    err_func("command %s failed with exit code %d\n", preconfig, status);
+                    break;
+                default:
+                    err_func("command %s failed with exit code %d\n", preconfig, status);
+                    break;
+            }
+        }
     }
 
     if(unshare(CLONE_NEWNS) == -1) {
@@ -301,7 +338,6 @@ int main(int argc, char **argv) {
         err_func("pipe failed: %s\n", strerror(errno));
     }
     */
-
     pid_t pid;
     char *stack;
     char *stack_top;
@@ -315,94 +351,125 @@ int main(int argc, char **argv) {
     stack_top = stack + stack_size;
     pid = clone(child, stack_top, 
         (/*CLONE_NEWUSER |*/ CLONE_NEWUTS | CLONE_NEWPID | 
-         CLONE_NEWNS | CLONE_NEWCGROUP | SIGCHLD), c);
+         CLONE_NEWNS | CLONE_NEWCGROUP | CLONE_NEWNET | SIGCHLD), c);
     if((pid_t)-1 == pid) {
         cleanup(c, stack);
         err_func("clone failed: %s\n", strerror(errno));
     }
 
-    /*
-    char uidmap[PATH_MAX];
-    if(snprintf(uidmap , PATH_MAX, "/proc/%ld/uid_map", (long)pid) < 0) {
-        cleanup(c, stack);
-        err_func("snprintf failed for /proc/%ld/uid_map: %s\n", 
-                (long)pid, strerror(errno));
+    if(mkdir("/var/run/netns", 0755) == -1) {
+        if(errno != EEXIST) {
+            err_func("mkdir /var/run/netns failed: %s\n", strerror(errno));
+        }
     }
 
-    char gidmap[PATH_MAX];
-    if(snprintf(gidmap , PATH_MAX, "/proc/%ld/gid_map", (long)pid) < 0) {
-        cleanup(c, stack);
-        err_func("snprintf failed for /proc/%ld/gid_map: %s\n", 
-                (long)pid, strerror(errno));
+    char nslnks[PATH_MAX];
+    if(snprintf(nslnks, PATH_MAX, "/proc/%ld/ns/net", (long)pid) < 0) {
+        err_func("snprintf failed: %s\n", strerror(errno));
     }
 
-    int fd1 = open(uidmap, O_RDWR);
-    if(fd1 == -1) {
-        cleanup(c, stack);
-        err_func("Failed to update %s: %s", uidmap, strerror(errno));
+    char nslnkt[PATH_MAX];
+    if(snprintf(nslnkt, PATH_MAX, "/var/run/netns/%s", c->name) < 0) {
+        err_func("snprintf failed: %s\n", strerror(errno));
     }
 
-    char uidmapping[128];
-    if(snprintf(uidmapping, 128, "%u %u 1\n", 0, getuid()) < 0) {
-        cleanup(c, stack);
-        close(fd1);
-        err_func("sprintf failed: %s", strerror(errno));
+    if(symlink(nslnks, nslnkt) == -1) {
+        err_func("symlink failed (netns): %s\n", strerror(errno));
     }
 
-    if(write(fd1, uidmapping, strlen(uidmapping)) != strlen(uidmapping)) {
-        cleanup(c, stack);
-        close(fd1);
-        err_func("Failed to write uidmapping %s: %s\n",
-                uidmap, strerror(errno));
+    char vethcmd[256];
+    if(snprintf(vethcmd, 256, "ip link set c%s netns %s",
+                c->name, c->name) < 0) {
+        err_func("snprintf failed for vethcmd: %s\n", c->name);
     }
 
-    close(fd1);
-
-    char setgroups[128];
-    if(snprintf(setgroups, 128, "/proc/%ld/setgroups", (long)pid) < 0) {
-        cleanup(c, stack);
-        err_func("sprintf failed: %s\n", strerror(errno));
+    if((status = system(vethcmd)) != 0) {
+        if(status == -1) {
+            err_func("Failed to create child for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else if(status == 127) {
+            err_func("Failed to create shell for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else {
+            err_func("command %s failed with exit code %d\n", vethcmd, status);
+        }
     }
 
-    int fdg = open(setgroups, O_RDWR);
-    if(fdg == -1) {
-        cleanup(c, stack);
-        err_func("Failed to open %s: %s", setgroups, strerror(errno));
+    if(snprintf(vethcmd, 256, "ip netns exec %s ip link set dev c%s name eth0",
+                c->name, c->name) < 0) {
+        err_func("snprintf failed for vethcmd: %s\n", c->name);
     }
 
-    if(write(fdg, "deny", strlen("deny")) != strlen("deny")) {
-        cleanup(c, stack);
-        err_func("Failed to write to %s: %s\n", setgroups, strerror(errno));
+    if((status = system(vethcmd)) != 0) {
+        if(status == -1) {
+            err_func("Failed to create child for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else if(status == 127) {
+            err_func("Failed to create shell for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else {
+            err_func("command %s failed with exit code %d\n", vethcmd, status);
+        }
     }
 
-    close(fdg);
-
-    int fd2 = open(gidmap, O_RDWR);
-    if(fd2 == -1) {
-        cleanup(c, stack);
-        err_func("Failed to update %s: %s\n", gidmap, strerror(errno));
+    if(snprintf(vethcmd, 256, "ip netns exec %s ip addr add %s dev eth0", 
+                c->name, c->cidr) < 0) {
+        err_func("snprintf failed for vethcmd: %s\n", c->name);
     }
 
-    char gidmapping[128];
-    if(snprintf(gidmapping, 128, "%u %u 1\n", 0, getgid()) < 0) {
-        cleanup(c, stack);
-        close(fd2);
-        err_func("sprintf failed: %s\n", strerror(errno));
+    if((status = system(vethcmd)) != 0) {
+        if(status == -1) {
+            err_func("Failed to create child for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else if(status == 127) {
+            err_func("Failed to create shell for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else {
+            err_func("command %s failed with exit code %d\n", vethcmd, status);
+        }
     }
 
-    if(write(fd2, gidmapping, strlen(gidmapping)) != strlen(gidmapping)) {
-        cleanup(c, stack);
-        close(fd2);
-        err_func("Failed to write gidmapping %s: %s\n", 
-                gidmap, strerror(errno));
+    if(snprintf(vethcmd, 256, "ip netns exec %s ip link set eth0 up", 
+                c->name) < 0) {
+        err_func("snprintf failed for vethcmd: %s\n", c->name);
     }
 
-    close(fd2);
-    close(c->pipe_fd[1]);
-    */
+    if((status = system(vethcmd)) != 0) {
+        if(status == -1) {
+            err_func("Failed to create child for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else if(status == 127) {
+            err_func("Failed to create shell for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else {
+            err_func("command %s failed with exit code %d\n", vethcmd, status);
+        }
+    }
+
+    if(snprintf(vethcmd, 256, 
+        "ip netns exec %s ip route add default via 172.20.0.1", c->name) < 0) {
+        err_func("snprintf failed for vethcmd: %s\n", c->name);
+    }
+
+    if((status = system(vethcmd)) != 0) {
+        if(status == -1) {
+            err_func("Failed to create child for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else if(status == 127) {
+            err_func("Failed to create shell for %s: %s\n", vethcmd,
+                    strerror(errno));
+        } else {
+            err_func("command %s failed with exit code %d\n", vethcmd, status);
+        }
+    }
     if(waitpid(pid, &status, 0) == -1) {
         cleanup(c, stack);
         err_func("waitpid failed: %s\n", strerror(errno));
+    }
+
+    if(unlink(nslnkt) != 0) {
+        err_warn("Failed to remove netns symlink %s: %s\n", 
+                nslnkt, strerror(errno));
     }
 
     cleanup(c, stack);

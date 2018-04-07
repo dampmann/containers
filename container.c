@@ -110,7 +110,7 @@ static int child(void *arg) {
 
     mnt_cgroup_dir("blkio");
     mnt_cgroup_dir("cpu,cpuacct");
-    //mnt_cgroup_dir("cpuset");
+    mnt_cgroup_dir("cpuset");
     mnt_cgroup_dir("devices");
     mnt_cgroup_dir("freezer");
     mnt_cgroup_dir("hugetlb");

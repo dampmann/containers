@@ -9,8 +9,8 @@ child_pid=$1
 cname=$2
 for i in $(find /sys/fs/cgroup/ -mindepth 1 -maxdepth 1 -type d | egrep -v cpuset)
 do
-    echo "mkdir -p ${i}/peer/${cname}"
-    mkdir -p ${i}/peer/${cname}
-    echo "$child_pid" > ${i}/peer/${cname}/cgroup.procs
+    echo "mkdir -p ${i}/${cname}"
+    mkdir -p ${i}/${cname}
+    echo "$child_pid" > ${i}/${cname}/cgroup.procs
 done
 

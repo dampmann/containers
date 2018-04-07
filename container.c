@@ -25,7 +25,7 @@ struct container {
     char *cidr;
     char new_root[PATH_MAX];
     char old_root[PATH_MAX];
-    //int pipe_fd[2];
+    int pipe_fd[2];
 };
 
 void err_func(const char *msgfmt , ...) {
@@ -53,12 +53,13 @@ static void mnt_cgroup_dir(const char *p) {
         err_func("mkdir %s failed: %s\n", d, strerror(errno));
     }
 
-    if(mount(p, d, "cgroup", (MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME), p) == -1) {
+    if(mount("cgroup", d, "cgroup", (MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME), p) == -1) {
         err_func("mount %s failed: %s\n", d, strerror(errno));
     }
 }
 
 static int child(void *arg) {
+    char ch;
     struct container *argvv = (struct container*)arg;
     
     if(mount(argvv->new_root, argvv->new_root, "", MS_BIND|MS_REC, "") == -1) {
@@ -101,9 +102,15 @@ static int child(void *arg) {
         err_func("mount /sys/fs/cgroup failed: %s\n", strerror(errno));
     }
 
+    /*Wait for the cgroup setup */
+    close(argvv->pipe_fd[1]);
+    if(read(argvv->pipe_fd[0], &ch, 1) != 0) {
+        err_func("Failed reading from pipe: %s\n", strerror(errno));
+    }
+
     mnt_cgroup_dir("blkio");
     mnt_cgroup_dir("cpu,cpuacct");
-    mnt_cgroup_dir("cpuset");
+    //mnt_cgroup_dir("cpuset");
     mnt_cgroup_dir("devices");
     mnt_cgroup_dir("freezer");
     mnt_cgroup_dir("hugetlb");
@@ -231,7 +238,7 @@ int main(int argc, char **argv) {
             cleanup(c, NULL);
             fprintf(stderr, 
                 "Usage: %s -c container_dir"
-                " -n container_name -r executable\n",
+                " -n container_name -i cidr -r executable\n",
             argv[0]);
             exit(EXIT_FAILURE);
        }
@@ -241,7 +248,7 @@ int main(int argc, char **argv) {
         cleanup(c, NULL);
         fprintf(stderr, 
             "Usage: %s -c container_dir"
-            " -n container_name -r executable\n",
+            " -n container_name -i cidr -r executable\n",
         argv[0]);
         exit(EXIT_FAILURE);
     }
@@ -297,12 +304,11 @@ int main(int argc, char **argv) {
         }
     }
 
-    /*
     if(pipe(c->pipe_fd) == -1) {
         cleanup(c, NULL);
         err_func("pipe failed: %s\n", strerror(errno));
     }
-    */
+
     pid_t pid;
     char *stack;
     char *stack_top;
@@ -321,6 +327,27 @@ int main(int argc, char **argv) {
         cleanup(c, stack);
         err_func("clone failed: %s\n", strerror(errno));
     }
+
+    char cgroupcmd[PATH_MAX];
+    if(snprintf(cgroupcmd, PATH_MAX, "./cgroup_config.sh %ld %s", 
+                (long)pid, c->name) < 0) {
+        err_func("snprintf failed: %s\n", strerror(errno));
+    }
+
+    if((status = system(cgroupcmd)) != 0) {
+        if(status == -1) {
+            err_func("Failed to create child for %s: %s\n", cgroupcmd,
+                    strerror(errno));
+        } else if(status == 127) {
+            err_func("Failed to create shell for %s: %s\n", cgroupcmd,
+                    strerror(errno));
+        } else {
+            err_func("command %s failed with exit code %d\n", 
+                    cgroupcmd, status);
+        }
+    }
+
+    close(c->pipe_fd[1]);
 
     if(mkdir("/var/run/netns", 0755) == -1) {
         if(errno != EEXIST) {
@@ -444,6 +471,7 @@ int main(int argc, char **argv) {
             err_func("command %s failed with exit code %d\n", vethcmd, status);
         }
     }
+
     if(snprintf(vethcmd, 256, 
         "ip netns exec %s ip route add default via 172.20.0.1", c->name) < 0) {
         err_func("snprintf failed for vethcmd: %s\n", c->name);
@@ -460,6 +488,7 @@ int main(int argc, char **argv) {
             err_func("command %s failed with exit code %d\n", vethcmd, status);
         }
     }
+
     if(waitpid(pid, &status, 0) == -1) {
         cleanup(c, stack);
         err_func("waitpid failed: %s\n", strerror(errno));

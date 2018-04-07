@@ -1,7 +1,17 @@
 #!/bin/bash
+# nsenter -t 6201 -m -u -n -p -C /bin/bash
+# not sure if I need them all, guess not
+# sysctl -w net.ipv4.ip_forward=1
+#net.ipv4.conf.all.forwarding = 1
+#net.ipv4.conf.cbr.forwarding = 1
+#net.ipv4.conf.default.forwarding = 1
+#net.ipv4.conf.docker0.forwarding = 1
+#net.ipv4.conf.eth0.forwarding = 1
+#net.ipv4.conf.lo.forwarding = 1
+#net.ipv4.ip_forward = 1
 
 if (( $# != 1)); then
-    echo "requires the container name and the ip address in cidr notation"
+    echo "requires the container name"
     exit 1
 fi
 
@@ -43,6 +53,8 @@ if [ $has_bridge != 1 ]; then
     fi
 fi
 echo -n " OK"; echo
+echo "sysctl -w net.ipv4.ip_forward=1"
+sysctl -w net.ipv4.ip_forward=1
 echo -n "Configuring iptables to allow container traffic."
 has_inner_traffic=$(iptables -S | grep -c '\-A FORWARD \-i cbr \-o cbr \-j ACCEPT')
 if [ $has_inner_traffic != 1 ]; then
@@ -73,6 +85,7 @@ if [ $has_internet_traffic != 1 ]; then
     fi
 fi
 echo -n " OK"; echo
+# wait for bridge!
 echo -n "Configuring veth pair."
 $(ip link add b${cname} type veth peer name c${cname})
 if [ $? != 0 ]; then

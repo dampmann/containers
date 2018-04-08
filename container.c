@@ -174,6 +174,10 @@ static int child(void *arg) {
         err_warn("rmdir /.pivot_root failed: %s\n", strerror(errno));
     }
 
+    if(sethostname(argvv->name, strlen(argvv->name)) == -1) {
+        err_warn("set hostname failed: %s\n", strerror(errno));
+    }
+
     if(execlp(argvv->exe, argvv->exe, NULL) == -1) {
         err_warn("execlp failed for %s: %s\n", argvv->exe, strerror(errno));
         return(EXIT_FAILURE);

@@ -85,22 +85,32 @@ if [ $has_internet_traffic != 1 ]; then
     fi
 fi
 echo -n " OK"; echo
+echo -n "Configuring iptables to allow internet to return to container part 2."
+has_internet_traffic=$(iptables -S | grep -c '\-A FORWARD \-i cbr \! \-o cbr \-j ACCEPT')
+if [ $has_internet_traffic != 1 ]; then
+    $(iptables -A FORWARD -i cbr ! -o cbr -j ACCEPT)
+    if [ $? != 0 ]; then
+        echo "Failed to apply iptables rule to allow internet access."
+        exit 27
+    fi
+fi
+echo -n " OK"; echo
 # wait for bridge!
 echo -n "Configuring veth pair."
 $(ip link add b${cname} type veth peer name c${cname})
 if [ $? != 0 ]; then
     echo "Failed to add veth pair."
-    exit 27
+    exit 28
 fi
 $(ip link set dev b${cname} master cbr)
 if [ $? != 0 ]; then
     echo "Failed to set master for b${cname}."
-    exit 28
+    exit 29
 fi
 $(ip link set b${cname} up)
 if [ $? != 0 ]; then
     echo "Failed to set b${cname} to up."
-    exit 29
+    exit 30
 fi
 echo -n " OK"; echo
 

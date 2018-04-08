@@ -43,19 +43,24 @@ void err_warn(const char *msgfmt , ...) {
     va_end(fargs);
 }
 
-static void mnt_cgroup_dir(const char *p) {
+static int mount_cgroup(const char *p) {
     char d[PATH_MAX];
     if(snprintf(d, PATH_MAX, "/sys/fs/cgroup/%s", p) < 0) {
-        err_func("snprintf failed: %s\n", strerror(errno));
+        err_warn("snprintf failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(mkdir(d, 0555) == -1) {
-        err_func("mkdir %s failed: %s\n", d, strerror(errno));
+        err_warn("mkdir %s failed: %s\n", d, strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(mount("cgroup", d, "cgroup", (MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME), p) == -1) {
-        err_func("mount %s failed: %s\n", d, strerror(errno));
+        err_warn("mount %s failed: %s\n", d, strerror(errno));
+        return(EXIT_FAILURE);
     }
+
+    return(EXIT_SUCCESS);
 }
 
 static int child(void *arg) {
@@ -63,99 +68,118 @@ static int child(void *arg) {
     struct container *argvv = (struct container*)arg;
     
     if(mount(argvv->new_root, argvv->new_root, "", MS_BIND|MS_REC, "") == -1) {
-        err_func("mount %s (bind, recursive) failed: %s\n", 
+        err_warn("mount %s (bind, recursive) failed: %s\n", 
                 argvv->new_root, strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(chdir(argvv->new_root) == -1) {
-        err_func("chdir to %s failed: %s\n", argvv->new_root, strerror(errno));
+        err_warn("chdir to %s failed: %s\n", argvv->new_root, strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(pivot_root(argvv->new_root, argvv->old_root) == -1) {
         if(errno == EINVAL) {
             fprintf(stderr, "pivot_root failed: try unshare -m\n");
         } 
-        err_func("pivot_root failed: %s\n", strerror(errno));
+        err_warn("pivot_root failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(chdir("/") == -1) {
-        err_func("chdir failed to new / failed: %s\n", strerror(errno));
+        err_warn("chdir failed to new / failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(umount2("/.pivot_root", MNT_DETACH) == -1) {
-        err_func("umount2 (detach /.pivot_root) failed: %s\n", strerror(errno));
+        err_warn("umount2 (detach /.pivot_root) failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     } 
 
     if(mount("proc", "proc", "proc", 0, "") == -1) {
-        err_func("mount /proc failed: %s\n", strerror(errno));
+        err_warn("mount /proc failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(mount("tmp", "tmp", "tmpfs", 0, "") == -1) {
-        err_func("mount /tmp failed: %s\n", strerror(errno));
+        err_warn("mount /tmp failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(mount("sysfs", "sys", "sysfs", 0, "") == -1) {
-        err_func("mount /sys failed: %s\n", strerror(errno));
+        err_warn("mount /sys failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(mount("tmpfs", "/sys/fs/cgroup", "tmpfs", 0, "") == -1) {
-        err_func("mount /sys/fs/cgroup failed: %s\n", strerror(errno));
+        err_warn("mount /sys/fs/cgroup failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     /*Wait for the cgroup setup */
     close(argvv->pipe_fd[1]);
     if(read(argvv->pipe_fd[0], &ch, 1) != 0) {
-        err_func("Failed reading from pipe: %s\n", strerror(errno));
+        err_warn("Failed reading from pipe: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
-    mnt_cgroup_dir("blkio");
-    mnt_cgroup_dir("cpu,cpuacct");
-    mnt_cgroup_dir("cpuset");
-    mnt_cgroup_dir("devices");
-    mnt_cgroup_dir("freezer");
-    mnt_cgroup_dir("hugetlb");
-    mnt_cgroup_dir("memory");
-    mnt_cgroup_dir("net_cls,net_prio");
-    mnt_cgroup_dir("perf_event");
-    mnt_cgroup_dir("pids");
+    if(mount_cgroup("blkio") != EXIT_SUCCESS) return(EXIT_FAILURE);
+    if(mount_cgroup("cpu,cpuacct") != EXIT_SUCCESS) return(EXIT_FAILURE);
+    if(mount_cgroup("cpuset") != EXIT_SUCCESS) return(EXIT_FAILURE);
+    if(mount_cgroup("devices") != EXIT_SUCCESS) return(EXIT_FAILURE);
+    if(mount_cgroup("freezer") != EXIT_SUCCESS) return(EXIT_FAILURE);
+    if(mount_cgroup("hugetlb") != EXIT_SUCCESS) return(EXIT_FAILURE);
+    if(mount_cgroup("memory") != EXIT_SUCCESS) return(EXIT_FAILURE);
+    if(mount_cgroup("net_cls,net_prio") != EXIT_SUCCESS) return(EXIT_FAILURE);
+    if(mount_cgroup("perf_event") != EXIT_SUCCESS) return(EXIT_FAILURE);
+    if(mount_cgroup("pids") != EXIT_SUCCESS) return(EXIT_FAILURE);
     if(symlink("/sys/fs/cgroup/cpu,cpuacct", "/sys/fs/cgroup/cpu") == -1) {
-        err_func("symlink failed: %s\n", strerror(errno));
+        err_warn("symlink failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(symlink("/sys/fs/cgroup/cpu,cpuacct", "/sys/fs/cgroup/cpuacct") == -1) {
-        err_func("symlink failed: %s\n", strerror(errno));
+        err_warn("symlink failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(symlink("/sys/fs/cgroup/net_cls,net_prio", 
                 "/sys/fs/cgroup/net_cls") == -1) {
-        err_func("symlink failed: %s\n", strerror(errno));
+        err_warn("symlink failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(symlink("/sys/fs/cgroup/net_cls,net_prio", 
                 "/sys/fs/cgroup/net_prio") == -1) {
-        err_func("symlink failed: %s\n", strerror(errno));
+        err_warn("symlink failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(mount("devtmpfs", "dev", "devtmpfs", 0, "") == -1) {
-        err_func("mount /dev failed: %s\n", strerror(errno));
+        err_warn("mount /dev failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(mount("devpts", "dev/pts", "devpts", 0, "") == -1) {
-        err_func("mount /dev/pts failed: %s\n", strerror(errno));
+        err_warn("mount /dev/pts failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(mount("shmfs", "dev/shm", "tmpfs", 0, "") == -1) {
-        err_func("mount /dev/shm failed: %s\n", strerror(errno));
+        err_warn("mount /dev/shm failed: %s\n", strerror(errno));
+        return(EXIT_FAILURE);
     }
 
     if(rmdir("/.pivot_root") == -1) {
-        err_func("rmdir /.pivot_root failed: %s\n", strerror(errno));
+        err_warn("rmdir /.pivot_root failed: %s\n", strerror(errno));
     }
 
     if(execlp(argvv->exe, argvv->exe, NULL) == -1) {
-        err_func("execlp failed for %s: %s\n", argvv->exe, strerror(errno));
+        err_warn("execlp failed for %s: %s\n", argvv->exe, strerror(errno));
+        return(EXIT_FAILURE);
     }
 
+    /* Never reached */
     return(EXIT_SUCCESS);
 }
 
@@ -197,6 +221,8 @@ int main(int argc, char **argv) {
         err_func("Out of memory when allocating struct container\n");
     }
 
+    c->cdir = NULL;
+    c->cidr = NULL;
     c->name = NULL;
     c->exe = NULL;
 
@@ -253,9 +279,9 @@ int main(int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
 
-    char preconfig[256];
+    char preconfig[PATH_MAX];
 
-    if(snprintf(preconfig , 256, "./pre-config.sh %s", c->name) < 0) {
+    if(snprintf(preconfig , PATH_MAX, "./pre-config.sh %s", c->name) < 0) {
         cleanup(c, NULL);
         err_func("snprintf failed for preconfig: %s\n", strerror(errno));
     }
@@ -294,8 +320,8 @@ int main(int argc, char **argv) {
                 c->new_root, strerror(errno));
     }
 
-    fprintf(stderr, "Using %s as rootfs to start container %s\n", 
-            c->new_root, c->name);
+    fprintf(stderr, "Creating container %s with ip %s\n"
+            "rootfs %s\n", c->name, c->cidr, c->new_root);
 
     if((status = mkdir(c->old_root, 0700)) == -1) {
         if(errno != EEXIST) {
@@ -500,6 +526,6 @@ int main(int argc, char **argv) {
     }
 
     cleanup(c, stack);
-    return(EXIT_SUCCESS);
+    return(status);
 }
 

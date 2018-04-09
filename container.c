@@ -57,7 +57,6 @@ static int mount_cgroup(const char *p) {
 
     if(mount("cgroup", d, "cgroup", (MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME), p) == -1) {
         err_warn("mount %s failed: %s\n", d, strerror(errno));
-        return(EXIT_FAILURE);
     }
 
     return(EXIT_SUCCESS);
@@ -123,6 +122,10 @@ static int child(void *arg) {
         return(EXIT_FAILURE);
     }
 
+    /* Warn about problems mounting but don't make it mandatory,
+       it depends on the underlying system
+       bail out for snprintf and mkdir problems
+    */
     if(mount_cgroup("blkio") != EXIT_SUCCESS) return(EXIT_FAILURE);
     if(mount_cgroup("cpu,cpuacct") != EXIT_SUCCESS) return(EXIT_FAILURE);
     if(mount_cgroup("cpuset") != EXIT_SUCCESS) return(EXIT_FAILURE);
